@@ -9,7 +9,7 @@ use crate::{
     database::{Coin, DatabaseInterface},
     descriptors, DaemonControl, VERSION,
 };
-use utils::{deser_amount_from_sats, ser_amount};
+use utils::{deser_amount_from_sats, deser_psbt_base64, ser_amount, ser_base64};
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -352,7 +352,7 @@ impl DaemonControl {
         let psbt = Psbt {
             global: psbt::Global {
                 unsigned_tx: tx,
-                version: 2,
+                version: 0,
                 xpub: BTreeMap::new(),
                 proprietary: BTreeMap::new(),
                 unknown: BTreeMap::new(),
@@ -405,6 +405,7 @@ pub struct ListCoinsResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CreateSpendResult {
+    #[serde(serialize_with = "ser_base64", deserialize_with = "deser_psbt_base64")]
     pub psbt: Psbt,
 }
 
