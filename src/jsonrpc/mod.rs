@@ -169,6 +169,7 @@ impl From<commands::CommandError> for Error {
             }
             commands::CommandError::FetchingTransaction(..)
             | commands::CommandError::SanityCheckFailure(_)
+            | commands::CommandError::CoinSelectionError(..)
             | commands::CommandError::RescanTrigger(..) => {
                 Error::new(ErrorCode::InternalError, e.to_string())
             }

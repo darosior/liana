@@ -50,6 +50,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
+name = "bdk_coin_select"
+version = "0.1.0"
+source = "git+https://github.com/evanlinjin/bdk?branch=new_bdk_coin_select#7e0d4a5a8cc88e354a09c676efb3d80d33c261e8"
+
+[[package]]
 name = "bech32"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -226,6 +231,7 @@ name = "liana"
 version = "2.0.0"
 dependencies = [
  "backtrace",
+ "bdk_coin_select",
  "bip39",
  "dirs",
  "fern",
