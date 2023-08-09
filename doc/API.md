@@ -20,6 +20,8 @@ Commands must be sent as valid JSONRPC 2.0 requests, ending with a `\n`.
 | [`listconfirmed`](#listconfirmed)                           | List of confirmed transactions of incoming and outgoing funds |
 | [`listtransactions`](#listtransactions)                     | List of transactions with the given txids                     |
 | [`createrecovery`](#createrecovery)                         | Create a recovery transaction to sweep expired coins          |
+| [`updatelabels`](#updatelabels)                             | Update the labels                                             |
+| [`getlabels`](#getlabels)                                   | Get the labels for the given addresses, txids and outpoints   |
 
 # Reference
 
@@ -300,3 +302,31 @@ cover the requested feerate.
 | Field          | Type      | Description                                          |
 | -------------- | --------- | ---------------------------------------------------- |
 | `psbt`         | string    | PSBT of the recovery transaction, encoded as base64. |
+
+### `updatelabels`
+
+Update the labels from a given map of key/value, with the labelled bitcoin addresses, txids and outpoints as keys
+and the label as value. If a label already exist for the given target, the new label override the previous one. 
+
+#### Request
+
+| Field    | Type   | Description                                                                     |
+| -------- | ------ | ------------------------------------------------------------------------------- |
+| `labels` | object | Map with bitcoin addresses, txids or oupoints as keys, and 100 max string value |
+
+### `getlabels`
+
+Update the labels from a given map of key/value, with the labelled bitcoin addresses, txids and outpoints as keys
+and the label as value. If a label already exist for the given target, the new label override the previous one. 
+
+#### Request
+
+| Field      | Type            | Description                                                                         |
+| ---------- | --------------- | ----------------------------------------------------------------------------------- |
+| `labelled` | array of string | Map with bitcoin addresses, txids or oupoints as keys, and 100 max string as values |
+
+#### Response
+
+| Field    | Type   | Description                                                                 |
+| -------- | ------ | --------------------------------------------------------------------------- |
+| `labels` | object | Map with bitcoin addresses, txids or oupoints as keys, and string as values |

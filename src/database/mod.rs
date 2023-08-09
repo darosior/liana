@@ -12,7 +12,11 @@ use crate::{
     },
 };
 
-use std::{collections::HashMap, sync};
+use std::{
+    collections::{HashMap, HashSet},
+    iter::FromIterator,
+    sync,
+};
 
 use miniscript::bitcoin::{self, bip32, psbt::PartiallySignedTransaction as Psbt, secp256k1};
 
@@ -118,6 +122,20 @@ pub trait DatabaseConnection {
 
     /// Delete a Spend transaction from database.
     fn delete_spend(&mut self, txid: &bitcoin::Txid);
+
+    fn update_labels(
+        &mut self,
+        addresses: &HashMap<bitcoin::Address, String>,
+        txids: &HashMap<bitcoin::Txid, String>,
+        outpoints: &HashMap<bitcoin::OutPoint, String>,
+    );
+
+    fn labels(
+        &mut self,
+        addresses: &HashSet<bitcoin::Address>,
+        txids: &HashSet<bitcoin::Txid>,
+        outpoints: &HashSet<bitcoin::OutPoint>,
+    ) -> HashMap<String, String>;
 
     /// Mark the given tip as the new best seen block. Update stored data accordingly.
     fn rollback_tip(&mut self, new_tip: &BlockChainTip);
@@ -255,6 +273,29 @@ impl DatabaseConnection for SqliteConn {
 
     fn delete_spend(&mut self, txid: &bitcoin::Txid) {
         self.delete_spend(txid)
+    }
+
+    fn update_labels(
+        &mut self,
+        addresses: &HashMap<bitcoin::Address, String>,
+        txids: &HashMap<bitcoin::Txid, String>,
+        outpoints: &HashMap<bitcoin::OutPoint, String>,
+    ) {
+        self.update_labels(addresses, txids, outpoints)
+    }
+
+    fn labels(
+        &mut self,
+        addresses: &HashSet<bitcoin::Address>,
+        txids: &HashSet<bitcoin::Txid>,
+        outpoints: &HashSet<bitcoin::OutPoint>,
+    ) -> HashMap<String, String> {
+        let labels = self.db_labels(addresses, txids, outpoints);
+        HashMap::from_iter(
+            labels
+                .into_iter()
+                .map(|label| (label.labelled, label.value)),
+        )
     }
 
     fn rollback_tip(&mut self, new_tip: &BlockChainTip) {

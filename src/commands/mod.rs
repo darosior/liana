@@ -16,7 +16,7 @@ use utils::{
 };
 
 use std::{
-    collections::{hash_map, BTreeMap, HashMap},
+    collections::{hash_map, BTreeMap, HashMap, HashSet},
     convert::TryInto,
     fmt,
 };
@@ -575,6 +575,28 @@ impl DaemonControl {
         Ok(())
     }
 
+    pub fn update_labels(
+        &self,
+        addresses: &HashMap<bitcoin::Address, String>,
+        txids: &HashMap<bitcoin::Txid, String>,
+        outpoints: &HashMap<bitcoin::OutPoint, String>,
+    ) {
+        let mut db_conn = self.db.connection();
+        db_conn.update_labels(addresses, txids, outpoints);
+    }
+
+    pub fn get_labels(
+        &self,
+        addresses: &HashSet<bitcoin::Address>,
+        txids: &HashSet<bitcoin::Txid>,
+        outpoints: &HashSet<bitcoin::OutPoint>,
+    ) -> GetLabelsResult {
+        let mut db_conn = self.db.connection();
+        GetLabelsResult {
+            labels: db_conn.labels(addresses, txids, outpoints),
+        }
+    }
+
     pub fn list_spend(&self) -> ListSpendResult {
         let mut db_conn = self.db.connection();
         let spend_txs = db_conn
@@ -818,6 +840,11 @@ pub struct GetInfoResult {
 pub struct GetAddressResult {
     #[serde(deserialize_with = "deser_addr_assume_checked")]
     address: bitcoin::Address,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetLabelsResult {
+    pub labels: HashMap<String, String>,
 }
 
 impl GetAddressResult {

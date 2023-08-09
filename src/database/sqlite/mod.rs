@@ -14,7 +14,10 @@ use crate::{
     bitcoin::BlockChainTip,
     database::{
         sqlite::{
-            schema::{DbAddress, DbCoin, DbSpendTransaction, DbTip, DbWallet, SCHEMA},
+            schema::{
+                DbAddress, DbCoin, DbLabel, DbLabelledKind, DbSpendTransaction, DbTip, DbWallet,
+                SCHEMA,
+            },
             utils::{
                 create_fresh_db, curr_timestamp, db_exec, db_query, db_tx_query, db_version,
                 maybe_apply_migration, LOOK_AHEAD_LIMIT,
@@ -25,7 +28,12 @@ use crate::{
     descriptors::LianaDescriptor,
 };
 
-use std::{cmp, convert::TryInto, fmt, io, path};
+use std::{
+    cmp,
+    collections::{HashMap, HashSet},
+    convert::TryInto,
+    fmt, io, path,
+};
 
 use miniscript::bitcoin::{
     self, bip32,
@@ -35,7 +43,7 @@ use miniscript::bitcoin::{
     secp256k1,
 };
 
-const DB_VERSION: i64 = 2;
+const DB_VERSION: i64 = 3;
 
 #[derive(Debug)]
 pub enum SqliteDbError {
@@ -554,6 +562,69 @@ impl SqliteConn {
         .expect("Db must not fail")
     }
 
+    pub fn update_labels(
+        &mut self,
+        addresses: &HashMap<bitcoin::Address, String>,
+        txids: &HashMap<bitcoin::Txid, String>,
+        outpoints: &HashMap<bitcoin::OutPoint, String>,
+    ) {
+        let wallet_id: i64 = db_query(
+            &mut self.conn,
+            "SELECT id FROM wallets",
+            rusqlite::params![],
+            |row| row.get(0),
+        )
+        .expect("Db must not fail")
+        .pop()
+        .expect("There is always a wallet");
+        db_exec(&mut self.conn, |db_tx| {
+            for (labelled, kind, value) in addresses
+                .iter()
+                .map(|(a, v)| (a.to_string(), DbLabelledKind::Address, v))
+                .chain(
+                    txids
+                        .iter()
+                        .map(|(t, v)| (t.to_string(), DbLabelledKind::Txid, v)),
+                )
+                .chain(
+                    outpoints
+                        .iter()
+                        .map(|(o, v)| (o.to_string(), DbLabelledKind::OutPoint, v)),
+                )
+            {
+                db_tx.execute(
+                    "INSERT INTO labels (wallet_id, labelled, labelled_kind, value) VALUES (?1, ?2, ?3, ?4) \
+                    ON CONFLICT DO UPDATE SET value=excluded.value",
+                    rusqlite::params![wallet_id, labelled, kind as i64, value],
+                )?;
+            }
+            Ok(())
+        })
+        .expect("Db must not fail")
+    }
+
+    pub fn db_labels(
+        &mut self,
+        addresses: &HashSet<bitcoin::Address>,
+        txids: &HashSet<bitcoin::Txid>,
+        outpoints: &HashSet<bitcoin::OutPoint>,
+    ) -> Vec<DbLabel> {
+        let query = format!(
+            "SELECT * FROM labels where labelled in ({})",
+            addresses
+                .iter()
+                .map(|a| format!("'{}'", a))
+                .chain(txids.iter().map(|a| format!("'{}'", a)))
+                .chain(outpoints.iter().map(|a| format!("'{}'", a)))
+                .collect::<Vec<String>>()
+                .join(",")
+        );
+        db_query(&mut self.conn, &query, rusqlite::params![], |row| {
+            row.try_into()
+        })
+        .expect("Db must not fail")
+    }
+
     /// Retrieves a limited and ordered list of transactions ids that happened during the given
     /// range.
     pub fn db_list_txids(&mut self, start: u32, end: u32, limit: u64) -> Vec<bitcoin::Txid> {
@@ -807,6 +878,38 @@ CREATE TABLE spend_transactions (
             let db_tip = conn.db_tip();
             assert_eq!(db_tip.block_height.unwrap(), new_tip.height);
             assert_eq!(db_tip.block_hash.unwrap(), new_tip.hash);
+        }
+
+        fs::remove_dir_all(tmp_dir).unwrap();
+    }
+
+    #[test]
+    fn db_labels_update() {
+        let (tmp_dir, _, _, db) = dummy_db();
+
+        {
+            let txid_str = "0c62a990d20d54429e70859292e82374ba6b1b951a3ab60f26bb65fee5724ff7";
+            let txid = bitcoin::Txid::from_str(txid_str).unwrap();
+            let mut txids = HashSet::new();
+            txids.insert(txid);
+
+            let mut conn = db.connection().unwrap();
+            let db_labels = conn.db_labels(&HashSet::new(), &txids, &HashSet::new());
+            assert!(db_labels.is_empty());
+
+            let mut txids_labels = HashMap::new();
+            txids_labels.insert(txid, "hello".to_string());
+
+            conn.update_labels(&HashMap::new(), &txids_labels, &HashMap::new());
+
+            let db_labels = conn.db_labels(&HashSet::new(), &txids, &HashSet::new());
+            assert_eq!(db_labels[0].value, "hello");
+
+            txids_labels.insert(txid, "hello again".to_string());
+            conn.update_labels(&HashMap::new(), &txids_labels, &HashMap::new());
+
+            let db_labels = conn.db_labels(&HashSet::new(), &txids, &HashSet::new());
+            assert_eq!(db_labels[0].value, "hello again");
         }
 
         fs::remove_dir_all(tmp_dir).unwrap();

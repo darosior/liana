@@ -5,7 +5,12 @@ use crate::{
     descriptors, DaemonHandle,
 };
 
-use std::{collections::HashMap, env, fs, io, path, process, str::FromStr, sync, thread, time};
+use std::{
+    collections::{HashMap, HashSet},
+    env, fs, io, path, process,
+    str::FromStr,
+    sync, thread, time,
+};
 
 use miniscript::{
     bitcoin::{
@@ -331,6 +336,24 @@ impl DatabaseConnection for DummyDatabase {
     }
 
     fn complete_rescan(&mut self) {
+        todo!()
+    }
+
+    fn update_labels(
+        &mut self,
+        _addresses: &HashMap<bitcoin::Address, String>,
+        _txids: &HashMap<bitcoin::Txid, String>,
+        _outpoints: &HashMap<bitcoin::OutPoint, String>,
+    ) {
+        todo!()
+    }
+
+    fn labels(
+        &mut self,
+        _addresses: &HashSet<bitcoin::Address>,
+        _txids: &HashSet<bitcoin::Txid>,
+        _outpoints: &HashSet<bitcoin::OutPoint>,
+    ) -> HashMap<String, String> {
         todo!()
     }
 

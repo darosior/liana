@@ -3,7 +3,11 @@ use crate::{
     DaemonControl,
 };
 
-use std::{collections::HashMap, convert::TryInto, str::FromStr};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::TryInto,
+    str::FromStr,
+};
 
 use miniscript::bitcoin::{self, psbt::PartiallySignedTransaction as Psbt};
 
@@ -160,6 +164,81 @@ fn create_recovery(control: &DaemonControl, params: Params) -> Result<serde_json
     Ok(serde_json::json!(&res))
 }
 
+fn update_labels(control: &DaemonControl, params: Params) -> Result<serde_json::Value, Error> {
+    let mut addresses = HashMap::new();
+    let mut txids = HashMap::new();
+    let mut outpoints = HashMap::new();
+    for (labelled, value) in params
+        .get(0, "labels")
+        .ok_or_else(|| Error::invalid_params("Missing 'labels' parameter."))?
+        .as_object()
+        .ok_or_else(|| Error::invalid_params("Invalid 'labels' parameter."))?
+        .iter()
+    {
+        let value = value.as_str().map(|s| s.to_string()).ok_or_else(|| {
+            Error::invalid_params(format!("Invalid 'labels.{}' value.", labelled))
+        })?;
+        if value.len() >= 100 {
+            return Err(Error::invalid_params(format!(
+                "Invalid 'labels.{}' value length: must be less or equal than 100 characters",
+                labelled
+            )));
+        }
+        if let Ok(addr) = bitcoin::Address::from_str(labelled) {
+            let addr = addr.assume_checked();
+            addresses.insert(addr, value);
+        } else if let Ok(txid) = bitcoin::Txid::from_str(labelled) {
+            txids.insert(txid, value);
+        } else {
+            let outpoint = bitcoin::OutPoint::from_str(labelled).map_err(|_| {
+                Error::invalid_params(format!(
+                    "Invalid 'labels.{}' parameter: must be an address, a txid or an outpoint",
+                    labelled
+                ))
+            })?;
+            outpoints.insert(outpoint, value);
+        }
+    }
+
+    control.update_labels(&addresses, &txids, &outpoints);
+    Ok(serde_json::json!({}))
+}
+
+fn get_labels(control: &DaemonControl, params: Params) -> Result<serde_json::Value, Error> {
+    let mut addresses = HashSet::new();
+    let mut txids = HashSet::new();
+    let mut outpoints = HashSet::new();
+    for labelled in params
+        .get(0, "labelled")
+        .ok_or_else(|| Error::invalid_params("Missing 'labels' parameter."))?
+        .as_array()
+        .ok_or_else(|| Error::invalid_params("Invalid 'labels' parameter."))?
+        .iter()
+    {
+        let labelled = labelled.as_str().ok_or_else(|| {
+            Error::invalid_params(format!("Invalid 'labels.{}' value.", labelled))
+        })?;
+        if let Ok(addr) = bitcoin::Address::from_str(labelled) {
+            let addr = addr.assume_checked();
+            addresses.insert(addr);
+        } else if let Ok(txid) = bitcoin::Txid::from_str(labelled) {
+            txids.insert(txid);
+        } else {
+            let outpoint = bitcoin::OutPoint::from_str(labelled).map_err(|_| {
+                Error::invalid_params(format!(
+                    "Invalid 'labelled.{}' parameter: must be an address, a txid or an outpoint",
+                    labelled
+                ))
+            })?;
+            outpoints.insert(outpoint);
+        }
+    }
+
+    Ok(serde_json::json!(
+        control.get_labels(&addresses, &txids, &outpoints)
+    ))
+}
+
 /// Handle an incoming JSONRPC2 request.
 pub fn handle_request(control: &DaemonControl, req: Request) -> Result<Response, Error> {
     let result = match req.method.as_str() {
@@ -221,6 +300,18 @@ pub fn handle_request(control: &DaemonControl, req: Request) -> Result<Response,
                 .params
                 .ok_or_else(|| Error::invalid_params("Missing 'psbt' parameter."))?;
             update_spend(control, params)?
+        }
+        "updatelabels" => {
+            let params = req
+                .params
+                .ok_or_else(|| Error::invalid_params("Missing 'labels' parameter."))?;
+            update_labels(control, params)?
+        }
+        "getlabels" => {
+            let params = req
+                .params
+                .ok_or_else(|| Error::invalid_params("Missing 'labelled' parameter."))?;
+            get_labels(control, params)?
         }
         _ => {
             return Err(Error::method_not_found());
