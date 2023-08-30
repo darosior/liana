@@ -2114,7 +2114,7 @@ dependencies = [
 [[package]]
 name = "liana"
 version = "1.0.0"
-source = "git+https://github.com/wizardsardine/liana?branch=master#85d470dd8dd67e6726118fe6dd86f9b4c8d3b0ef"
+source = "git+https://github.com/darosior/liana?branch=2308_fix_paths_on_windows#c727c07d899d1ac0681b53d1046279657695422a"
 dependencies = [
  "backtrace",
  "bip39",
