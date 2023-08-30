@@ -4,6 +4,12 @@ use tracing::{info, warn};
 
 use crate::app::config::InternalBitcoindExeConfig;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Possible errors when starting bitcoind.
 #[derive(PartialEq, Eq, Debug, Clone)]
 pub enum StartInternalBitcoindError {
@@ -64,7 +70,10 @@ pub fn start_internal_bitcoind(
         format!("-chain={}", network.to_core_arg()),
         format!("-datadir={}", datadir_path_str),
     ];
-    std::process::Command::new(exe_config.exe_path)
+    let mut command = std::process::Command::new(exe_config.exe_path);
+    #[cfg(target_os = "windows")]
+    let command = command.creation_flags(CREATE_NO_WINDOW);
+    command
         .args(&args)
         .stderr(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
