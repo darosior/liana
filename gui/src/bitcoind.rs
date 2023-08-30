@@ -62,7 +62,8 @@ pub fn start_internal_bitcoind(
     ];
     std::process::Command::new(exe_config.exe_path)
         .args(&args)
-        .stdout(std::process::Stdio::null()) // We still get bitcoind's logs in debug.log.
+        .stderr(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
         .spawn()
         .map_err(|e| StartInternalBitcoindError::CommandError(e.to_string()))
 }

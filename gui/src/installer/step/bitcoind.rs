@@ -865,15 +865,31 @@ impl Step for InternalBitcoindStep {
                                 return Command::none();
                             }
                         };
-                        if let Err(e) = start_internal_bitcoind(&self.network, exe_config.clone()) {
-                            self.started =
-                                Some(Err(StartInternalBitcoindError::CommandError(e.to_string())));
-                            return Command::none();
-                        }
+                        let handle =
+                            match start_internal_bitcoind(&self.network, exe_config.clone()) {
+                                Err(e) => {
+                                    self.started = Some(Err(
+                                        StartInternalBitcoindError::CommandError(e.to_string()),
+                                    ));
+                                    return Command::none();
+                                }
+                                Ok(h) => h,
+                            };
                         // Need to wait for cookie file to appear.
                         let cookie_path =
                             internal_bitcoind_cookie_path(&self.bitcoind_datadir, &self.network);
                         if !poll_for_file(&cookie_path, 200, 15) {
+                            log::error!("Cookie file still not present after 3 seconds. Waiting for the bitcoind process to finish.");
+                            match handle.wait_with_output() {
+                                Err(e) => {
+                                    log::error!("Error while waiting for bitcoind to finish: {}", e)
+                                }
+                                Ok(o) => {
+                                    log::error!("Exit status: {}", o.status);
+                                    log::error!("stdout: {}", String::from_utf8_lossy(&o.stdout));
+                                    log::error!("stderr: {}", String::from_utf8_lossy(&o.stderr));
+                                }
+                            }
                             self.started =
                                 Some(Err(StartInternalBitcoindError::CookieFileNotFound(
                                     cookie_path.to_string_lossy().into_owned(),
