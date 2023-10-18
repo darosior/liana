@@ -1095,6 +1095,12 @@ mod tests {
             spend_txid: None,
             spend_block: None,
         }]);
+        // If we try to use coin selection, the unconfirmed coin will not be used as a candidate
+        // and so we get a coin selection error due to insufficient funds.
+        assert!(matches!(
+            control.create_spend(&destinations, &[], 1),
+            Err(CommandError::CoinSelectionError(..))
+        ));
         let res = control.create_spend(&destinations, &[dummy_op], 1).unwrap();
         assert!(res.psbt.inputs[0].non_witness_utxo.is_some());
         let tx = res.psbt.unsigned_tx;
@@ -1185,6 +1191,12 @@ mod tests {
             control.create_spend(&destinations, &[dummy_op], 1),
             Err(CommandError::AlreadySpent(dummy_op))
         );
+        // If we try to use coin selection, the spent coin will not be used as a candidate
+        // and so we get a coin selection error due to insufficient funds.
+        assert!(matches!(
+            control.create_spend(&destinations, &[], 1),
+            Err(CommandError::CoinSelectionError(..))
+        ));
 
         // We'd bail out if they tried to create a transaction with a too high feerate.
         let dummy_op_dup = bitcoin::OutPoint {
