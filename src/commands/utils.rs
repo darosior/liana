@@ -10,7 +10,7 @@ use serde::{de, Deserialize, Deserializer, Serializer};
 
 use crate::database::Coin;
 
-use super::{DUST_OUTPUT_SATS, LONG_TERM_FEERATE_VB};
+use super::{CandidateCoin, DUST_OUTPUT_SATS, LONG_TERM_FEERATE_VB};
 
 pub fn deser_fromstr<'de, D, T>(deserializer: D) -> Result<T, D::Error>
 where
@@ -83,23 +83,26 @@ where
 ///
 /// `change_txo` is the change output to add if needed (with any value).
 ///
-/// `feerate_vb` is the minimum feerate in sats/vb.
+/// `feerate_vb` is the minimum feerate (in sats/vb).
+///
+/// `min_fee` is the minimum fee (in sats) that the selection must have.
 ///
 /// `max_sat_weight` is the maximum size difference (in vb) of
 /// an input in the transaction before and after satisfaction.
 pub fn select_coins_for_spend(
-    candidate_coins: Vec<Coin>,
+    candidate_coins: &[CandidateCoin],
     base_tx: bitcoin::Transaction,
     change_txo: bitcoin::TxOut,
     feerate_vb: u64,
+    min_fee: u64,
     max_sat_weight: usize,
 ) -> Result<(Vec<Coin>, bitcoin::Amount), InsufficientFunds> {
     let max_input_weight = TXIN_BASE_WEIGHT + max_sat_weight as u32;
     let candidates: Vec<Candidate> = candidate_coins
         .iter()
-        .map(|coin| Candidate {
+        .map(|cand| Candidate {
             input_count: 1,
-            value: coin.amount.to_sat(),
+            value: cand.coin.amount.to_sat(),
             weight: max_input_weight,
             is_segwit: true, // We only support receiving on Segwit scripts.
         })
@@ -110,7 +113,7 @@ pub fn select_coins_for_spend(
     let target = Target {
         value: base_tx.output.iter().map(|o| o.value).sum(),
         feerate: FeeRate::from_sat_per_vb(feerate_vb as f32),
-        min_fee: 0, // Non-zero value only required for replacement transactions.
+        min_fee,
     };
     let drain_weights = DrainWeights {
         output_weight: {
@@ -125,6 +128,12 @@ pub fn select_coins_for_spend(
         change_policy::min_value_and_waste(drain_weights, DUST_OUTPUT_SATS, long_term_feerate);
 
     let mut selector = CoinSelector::new(&candidates, base_weight);
+    // Select any mandatory candidates.
+    for (i, cand) in candidate_coins.iter().enumerate() {
+        if cand.must_select {
+            selector.select(i);
+        }
+    }
     if let Err(e) = selector.run_bnb(
         LowestFee {
             target,
@@ -147,7 +156,7 @@ pub fn select_coins_for_spend(
         selector
             .selected_indices()
             .iter()
-            .map(|i| candidate_coins[*i])
+            .map(|i| candidate_coins[*i].coin)
             .collect(),
         change_amount,
     ))
