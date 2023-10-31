@@ -3,7 +3,7 @@ use bdk_coin_select::{
     InsufficientFunds, Target, TXIN_BASE_WEIGHT,
 };
 use log::warn;
-use std::str::FromStr;
+use std::{convert::TryInto, str::FromStr};
 
 use miniscript::bitcoin::{self, consensus, hashes::hex::FromHex};
 use serde::{de, Deserialize, Deserializer, Serializer};
@@ -95,9 +95,19 @@ pub fn select_coins_for_spend(
     change_txo: bitcoin::TxOut,
     feerate_vb: u64,
     min_fee: u64,
-    max_sat_weight: usize,
+    max_sat_weight: u32,
 ) -> Result<(Vec<Coin>, bitcoin::Amount), InsufficientFunds> {
-    let max_input_weight = TXIN_BASE_WEIGHT + max_sat_weight as u32;
+    let out_value_nochange = base_tx.output.iter().map(|o| o.value).sum();
+
+    // Create the coin selector from the given candidates. NOTE: we rely on the ordering of the
+    // coins in the passed candidate_coins and created candidates vector to be the same in order to
+    // select the mandatory candidates.
+    let base_weight: u32 = base_tx
+        .weight()
+        .to_wu()
+        .try_into()
+        .expect("Transaction weight must fit in u32");
+    let max_input_weight = TXIN_BASE_WEIGHT + max_sat_weight;
     let candidates: Vec<Candidate> = candidate_coins
         .iter()
         .map(|cand| Candidate {
@@ -107,33 +117,43 @@ pub fn select_coins_for_spend(
             is_segwit: true, // We only support receiving on Segwit scripts.
         })
         .collect();
-    // Transaction base weight is calculated from transaction with no inputs and no change output.
-    let base_weight = base_tx.weight().to_wu() as u32;
-    let long_term_feerate = FeeRate::from_sat_per_vb(LONG_TERM_FEERATE_VB as f32);
-    let target = Target {
-        value: base_tx.output.iter().map(|o| o.value).sum(),
-        feerate: FeeRate::from_sat_per_vb(feerate_vb as f32),
-        min_fee,
-    };
+    let mut selector = CoinSelector::new(&candidates, base_weight);
+    for (i, cand) in candidate_coins.iter().enumerate() {
+        if cand.must_select {
+            // It's fine because the candidates ordering is the same in the vector.
+            selector.select(i);
+        }
+    }
+
+    // Now set the change policy. We use a policy which ensures no change output is created with a
+    // lower value than our custom dust limit. NOTE: the change output weight must account for a
+    // potential difference in the size of the outputs count varint. This is why we take the whole
+    // change txo as argument and compute the weight difference below.
+    let long_term_feerate = FeeRate::from_sat_per_vb(LONG_TERM_FEERATE_VB);
     let drain_weights = DrainWeights {
         output_weight: {
             let mut tx_with_change = base_tx;
             tx_with_change.output.push(change_txo);
-            tx_with_change.weight().to_wu() as u32 - base_weight
+            tx_with_change
+                .weight()
+                .to_wu()
+                .checked_sub(base_weight.into())
+                .expect("base_weight can't be larger")
+                .try_into()
+                .expect("tx size must always fit in u32")
         },
         spend_weight: max_input_weight,
     };
-    // Change policy ensures any change output is not too small and that transaction waste is reduced.
     let change_policy =
         change_policy::min_value_and_waste(drain_weights, DUST_OUTPUT_SATS, long_term_feerate);
 
-    let mut selector = CoinSelector::new(&candidates, base_weight);
-    // Select any mandatory candidates.
-    for (i, cand) in candidate_coins.iter().enumerate() {
-        if cand.must_select {
-            selector.select(i);
-        }
-    }
+    // Finally, run the coin selection algorithm. We use a BnB with 100k iterations and if it
+    // couldn't find any solution we fallback to selecting coins by descending value.
+    let target = Target {
+        value: out_value_nochange,
+        feerate: FeeRate::from_sat_per_vb(feerate_vb as f32),
+        min_fee,
+    };
     if let Err(e) = selector.run_bnb(
         LowestFee {
             target,
@@ -146,12 +166,12 @@ pub fn select_coins_for_spend(
             "Coin selection error: '{}'. Selecting coins by descending value per weight unit...",
             e.to_string()
         );
-        // If selection not possible by BnB, order coins by descending value ready for selection below.
         selector.sort_candidates_by_descending_value_pwu();
     }
-    selector.select_until_target_met(target, change_policy(&selector, target))?;
     let drain = change_policy(&selector, target);
     let change_amount = bitcoin::Amount::from_sat(drain.value);
+    selector.select_until_target_met(target, drain)?;
+
     Ok((
         selector
             .selected_indices()

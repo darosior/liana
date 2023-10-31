@@ -13,7 +13,6 @@ use crate::{
 pub use crate::database::{CoinStatus, LabelItem};
 
 use bdk_coin_select::InsufficientFunds;
-use log::info;
 use utils::{
     deser_addr_assume_checked, deser_amount_from_sats, deser_fromstr, deser_hex,
     select_coins_for_spend, ser_amount, ser_hex, ser_to_string,
@@ -40,7 +39,7 @@ use serde::{Deserialize, Serialize};
 const DUST_OUTPUT_SATS: u64 = 5_000;
 
 // Long-term feerate (sats/vb) used for coin selection considerations.
-const LONG_TERM_FEERATE_VB: u64 = 10;
+const LONG_TERM_FEERATE_VB: f32 = 10.0;
 
 // Assume that paying more than 1BTC in fee is a bug.
 const MAX_FEE: u64 = bitcoin::blockdata::constants::COIN_VALUE;
@@ -353,6 +352,18 @@ impl DaemonControl {
         coins_outpoints: &[bitcoin::OutPoint],
         feerate_vb: u64,
     ) -> Result<CreateSpendResult, CommandError> {
+        // This method is a bit convoluted, but it's the nature of creating a Bitcoin transaction
+        // with a target feerate and outputs. In addition, we support different modes (coin control
+        // vs automated coin selection, self-spend, etc..) which make the logic a bit more
+        // intricate. Here is a brief overview of what we're doing here:
+        // 1. Create a transaction with all the target outputs (if this is a self-send, none are
+        //    added a this step the only output will be added as a change output).
+        // 2. Automatically select the coins if necessary and determine whether a change output
+        //    will be necessary for this transaction from the set of (automatically or manually)
+        //    selected coins. The output for a self-send is added there.
+        // 3. Fetch the selected coins from database and add them as inputs to the transaction.
+        // 4. Finalize the PSBT and sanity check it before returning it.
+
         let is_self_send = destinations.is_empty();
         // For self-send, the coins must be specified.
         if is_self_send && coins_outpoints.is_empty() {
@@ -404,7 +415,11 @@ impl DaemonControl {
             });
         }
         assert_eq!(tx.output.is_empty(), is_self_send);
-        // Get the change address to create a dummy change txo.
+
+        // Now compute whether we'll need a change output while automatically selecting coins to be
+        // used as input if necessary.
+        // We need to get the size of a potential change output to select coins / determine whether
+        // we should include one, so get a change address and create a dummy txo for this purpose.
         let change_index = db_conn.change_index();
         let change_desc = self
             .config
@@ -415,11 +430,13 @@ impl DaemonControl {
             value: std::u64::MAX,
             script_pubkey: change_desc.script_pubkey(),
         };
-        // Change amount is determined using coin selection.
-        // If change is required, the next change index in DB will be updated below.
+        // Now, either select the coins necessary or use the ones provided (verifying they do in
+        // fact exist and are yet unspent) and determine whether there is any leftover to create a
+        // change output.
         let (selected_coins, change_amount) = {
             let candidate_coins: Vec<CandidateCoin> = if coins_outpoints.is_empty() {
-                // Use all confirmed coins as candidates.
+                // We only select confirmed coins for now. Including unconfirmed ones as well would
+                // introduce a whole bunch of additional complexity.
                 db_conn
                     .coins(&[CoinStatus::Confirmed], &[])
                     .into_values()
@@ -429,10 +446,9 @@ impl DaemonControl {
                     })
                     .collect()
             } else {
-                // Use specified outpoints only and check they are eligible candidates.
+                // Query from DB and sanity check the provided coins to spend.
                 let coins = db_conn.coins(&[], coins_outpoints);
                 for op in coins_outpoints {
-                    // Get the coin from our in-DB unspent txos.
                     let coin = coins.get(op).ok_or(CommandError::UnknownOutpoint(*op))?;
                     if coin.is_spent() {
                         return Err(CommandError::AlreadySpent(*op));
@@ -449,20 +465,43 @@ impl DaemonControl {
                     })
                     .collect()
             };
-            // Check transaction has no inputs and only non-change outputs.
+            // At this point the transaction still has no input and no change output, as expected
+            // by the coins selection helper function.
             assert!(tx.input.is_empty());
             assert_eq!(tx.output.len(), destinations.len());
+            let max_sat_wu = self
+                .config
+                .main_descriptor
+                .max_sat_weight()
+                .try_into()
+                .expect("Weight must fit in a u32");
             select_coins_for_spend(
                 &candidate_coins,
                 tx.clone(),
                 change_txo.clone(),
                 feerate_vb,
                 0, // We only constrain the feerate.
-                self.config.main_descriptor.max_sat_weight(),
+                max_sat_wu,
             )
             .map_err(CommandError::CoinSelectionError)?
         };
-        info!("Change amount will be {} sats.", change_amount.to_sat());
+        // If necessary, add a change output.
+        if change_amount.to_sat() > 0 {
+            // Don't forget to update our next change index!
+            let next_index = change_index
+                .increment()
+                .expect("Must not get into hardened territory");
+            db_conn.set_change_index(next_index, &self.secp);
+            check_output_value(change_amount)?;
+
+            // TODO: shuffle once we have Taproot
+            change_txo.value = change_amount.to_sat();
+            tx.output.push(change_txo);
+            psbt_outs.push(PsbtOut {
+                bip32_derivation: change_desc.bip32_derivations(),
+                ..PsbtOut::default()
+            });
+        }
 
         // Iterate through given outpoints to fetch the coins (hence checking their existence
         // at the same time). We checked there is at least one, therefore after this loop the
@@ -508,24 +547,7 @@ impl DaemonControl {
             });
         }
 
-        // If necessary, add a change output.
-        if change_amount.to_sat() > 0 {
-            // Don't forget to update our next change index!
-            let next_index = change_index
-                .increment()
-                .expect("Must not get into hardened territory");
-            db_conn.set_change_index(next_index, &self.secp);
-            check_output_value(change_amount)?;
-
-            // TODO: shuffle once we have Taproot
-            change_txo.value = change_amount.to_sat();
-            tx.output.push(change_txo);
-            psbt_outs.push(PsbtOut {
-                bip32_derivation: change_desc.bip32_derivations(),
-                ..PsbtOut::default()
-            });
-        }
-
+        // Finally, create the PSBT with all inputs and outputs, sanity check it and return it.
         let psbt = Psbt {
             unsigned_tx: tx,
             version: 0,
@@ -1158,9 +1180,9 @@ mod tests {
             spend_block: None,
         }]);
         assert_eq!(
-            control.create_spend(&destinations, &[dummy_op_dup], 1_001),
+            control.create_spend(&destinations, &[dummy_op_dup], 1_003),
             Err(CommandError::InsaneFees(InsaneFeeInfo::TooHighFeerate(
-                1001
+                1_001
             )))
         );
 
