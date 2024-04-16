@@ -2204,7 +2204,8 @@ dependencies = [
 [[package]]
 name = "iced_futures"
 version = "0.6.0"
-source = "git+https://github.com/edouardparis/iced?branch=fix-futures-recipe#2d8318b13bdf8aaf31bc6d5a72b22313ed2d10cf"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "215d51fa4f70dbb63775d7141243c4d98d4d525d8949695601f8fbac7dcbc04e"
 dependencies = [
  "futures",
  "log",
@@ -2620,7 +2621,8 @@ dependencies = [
 [[package]]
 name = "liana"
 version = "5.0.0"
-source = "git+https://github.com/wizardsardine/liana?branch=5.x#9772c9e5d3035696785b296b41fda9bc8be20518"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f74fb877b7bcef33e1703628666d009dbccc3072655fdc8d6afcdfc040c3926c"
 dependencies = [
  "backtrace",
  "bdk_coin_select",

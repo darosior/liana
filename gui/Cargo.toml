@@ -15,7 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 async-hwi = "0.0.16"
-liana = { git = "https://github.com/wizardsardine/liana", branch = "5.x", default-features = false, features = ["nonblocking_shutdown"] }
+liana = { version = "5.0", default-features = false, features = ["nonblocking_shutdown"] }
 liana_ui = { path = "ui" }
 backtrace = "0.3"
 hex = "0.4.3"
@@ -46,9 +46,6 @@ base64 = "0.21"
 bitcoin_hashes = "0.12"
 reqwest = { version = "0.11", default-features=false, features = ["rustls-tls"] }
 rust-ini = "0.19.0"
-
-[patch.crates-io]
-iced_futures = { git = "https://github.com/edouardparis/iced", branch = "fix-futures-recipe"}
 
 [target.'cfg(windows)'.dependencies]
 zip = { version = "0.6", default-features=false, features = ["bzip2", "deflate"] }

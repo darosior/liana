@@ -315,13 +315,6 @@ impl Application for GUI {
                 _ => None,
             }),
         ])
-        .with_filter(|(event, _status)| {
-            matches!(
-                event,
-                iced::Event::Window(iced_native::window::Event::CloseRequested)
-                    | iced::Event::Keyboard(_)
-            )
-        })
     }
 
     fn view(&self) -> Element<Self::Message> {
