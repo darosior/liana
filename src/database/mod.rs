@@ -155,6 +155,9 @@ pub trait DatabaseConnection {
         &mut self,
         txids: &[bitcoin::Txid],
     ) -> Vec<(bitcoin::Transaction, Option<i32>, Option<u32>)>;
+
+    /// Retrieve a transaction if it exists.
+    fn get_tx(&mut self, txid: &bitcoin::Txid) -> Option<bitcoin::Transaction>;
 }
 
 impl DatabaseConnection for SqliteConn {
@@ -338,6 +341,10 @@ impl DatabaseConnection for SqliteConn {
                 )
             })
             .collect()
+    }
+
+    fn get_tx(&mut self, txid: &bitcoin::Txid) -> Option<bitcoin::Transaction> {
+        self.get_tx(txid)
     }
 }
 

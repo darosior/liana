@@ -746,6 +746,21 @@ impl SqliteConn {
         .expect("Db must not fail")
     }
 
+    pub fn get_tx(&mut self, txid: &bitcoin::Txid) -> Option<bitcoin::Transaction> {
+        db_query(
+            &mut self.conn,
+            "SELECT tx FROM transactions WHERE txid = ?1",
+            rusqlite::params![txid[..].to_vec()],
+            |row| {
+                let tx: Vec<u8> = row.get(0)?;
+                let tx = bitcoin::consensus::deserialize(&tx).expect("We only store valid txs");
+                Ok(tx)
+            },
+        )
+        .expect("Db must not fail")
+        .pop()
+    }
+
     pub fn delete_spend(&mut self, txid: &bitcoin::Txid) {
         db_exec(&mut self.conn, |db_tx| {
             db_tx.execute(
