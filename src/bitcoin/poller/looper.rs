@@ -4,7 +4,10 @@ use crate::{
     descriptors,
 };
 
-use std::{collections::HashSet, sync, time};
+use std::{
+    collections::{HashMap, HashSet},
+    sync, time,
+};
 
 use miniscript::bitcoin::{self, secp256k1};
 
@@ -156,6 +159,51 @@ fn update_coins(
     }
 }
 
+// Add new deposit and spend transactions to the database.
+fn add_txs_to_db(
+    bit: &impl BitcoinInterface,
+    db_conn: &mut Box<dyn DatabaseConnection>,
+    updated_coins: &UpdatedCoins,
+) {
+    // Get the outpoints of new/updated coins and their spend txids, if any.
+    let mut outpoints = HashMap::<bitcoin::OutPoint, Option<bitcoin::Txid>>::new();
+
+    // First get all newly received coins that have not expired.
+    outpoints.extend(updated_coins.received.iter().filter_map(|c| {
+        if !updated_coins.expired.contains(&c.outpoint) {
+            Some((c.outpoint, None)) // `received` coins are not spending
+        } else {
+            None
+        }
+    }));
+
+    // Add spend txid for new & existing coins.
+    outpoints.extend(
+        updated_coins
+            .spending
+            .iter()
+            .map(|(op, txid)| (*op, Some(*txid))),
+    );
+
+    // Get distinct txids from the outpoints and their spend txids.
+    let txids = outpoints
+        .keys()
+        .map(|op| op.txid)
+        .chain(outpoints.values().filter_map(|txid| *txid))
+        .collect::<HashSet<_>>(); // remove duplicates
+    log::debug!("New txids: {:?}", txids);
+
+    // Now retrieve txs.
+    let txs: Vec<_> = txids
+        .into_iter()
+        .map(|txid| bit.wallet_transaction(&txid).map(|(tx, _)| tx))
+        .collect::<Option<Vec<_>>>()
+        .expect("we must retrieve all txs");
+    if !txs.is_empty() {
+        db_conn.new_txs(&txs);
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum TipUpdate {
     // The best block is still the same as in the previous poll.
@@ -233,6 +281,8 @@ fn updates(
         return updates(db_conn, bit, descs, secp);
     }
 
+    // Transactions must be added to the DB before coins due to foreign key constraints.
+    add_txs_to_db(bit, db_conn, &updated_coins);
     // The chain tip did not change since we started our updates. Record them and the latest tip.
     // Having the tip in database means that, as far as the chain is concerned, we've got all
     // updates up to this block. But not more.
