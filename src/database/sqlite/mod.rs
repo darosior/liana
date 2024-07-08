@@ -16,7 +16,7 @@ use crate::{
         sqlite::{
             schema::{
                 DbAddress, DbCoin, DbLabel, DbLabelledKind, DbSpendTransaction, DbTip, DbWallet,
-                SCHEMA,
+                DbWalletTransaction, SCHEMA,
             },
             utils::{
                 create_fresh_db, curr_timestamp, db_exec, db_query, db_tx_query, db_version,
@@ -711,6 +711,39 @@ impl SqliteConn {
             Ok(())
         })
         .expect("Database must be available")
+    }
+
+    pub fn list_wallet_transactions(
+        &mut self,
+        txids: &[bitcoin::Txid],
+    ) -> Vec<DbWalletTransaction> {
+        // The UNION will remove duplicates.
+        // We assume that a transaction's block info is the same in every coins row
+        // it appears in.
+        let query = format!(
+            "SELECT t.tx, c.blockheight, c.blocktime \
+            FROM transactions t \
+            INNER JOIN ( \
+                SELECT txid, blockheight, blocktime \
+                FROM coins \
+                WHERE wallet_id = {WALLET_ID} \
+                UNION \
+                SELECT spend_txid, spend_block_height, spend_block_time \
+                FROM coins \
+                WHERE wallet_id = {WALLET_ID} \
+                AND spend_txid IS NOT NULL \
+            ) c ON t.txid = c.txid \
+            WHERE t.txid in ({})",
+            txids
+                .iter()
+                .map(|txid| format!("x'{}'", FrontwardHexTxid(*txid)))
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        db_query(&mut self.conn, &query, rusqlite::params![], |row| {
+            row.try_into()
+        })
+        .expect("Db must not fail")
     }
 
     pub fn delete_spend(&mut self, txid: &bitcoin::Txid) {
@@ -2024,6 +2057,166 @@ CREATE TABLE labels (
             // Ordered by desc block time.
             let expected_txids = [6, 5].map(|i| txs.get(i).unwrap().txid());
             assert_eq!(&db_txids[..], &expected_txids,);
+        }
+
+        fs::remove_dir_all(tmp_dir).unwrap();
+    }
+
+    #[test]
+    fn sqlite_list_wallet_transactions() {
+        let (tmp_dir, _, _, db) = dummy_db();
+
+        {
+            let mut conn = db.connection().unwrap();
+
+            let txs: Vec<_> = (0..7)
+                .map(|i| bitcoin::Transaction {
+                    version: bitcoin::transaction::Version::TWO,
+                    lock_time: bitcoin::absolute::LockTime::from_height(i).unwrap(),
+                    input: Vec::new(),
+                    output: Vec::new(),
+                })
+                .collect();
+            conn.new_txs(&txs);
+
+            let coins = [
+                Coin {
+                    outpoint: bitcoin::OutPoint::new(txs.first().unwrap().txid(), 1),
+                    is_immature: false,
+                    block_info: None,
+                    amount: bitcoin::Amount::from_sat(98765),
+                    derivation_index: bip32::ChildNumber::from_normal_idx(10).unwrap(),
+                    is_change: false,
+                    spend_txid: None,
+                    spend_block: None,
+                },
+                Coin {
+                    outpoint: bitcoin::OutPoint::new(txs.get(1).unwrap().txid(), 2),
+                    is_immature: false,
+                    block_info: Some(BlockInfo {
+                        height: 101_095,
+                        time: 1_121_000,
+                    }),
+                    amount: bitcoin::Amount::from_sat(98765),
+                    derivation_index: bip32::ChildNumber::from_normal_idx(100).unwrap(),
+                    is_change: false,
+                    spend_txid: None,
+                    spend_block: None,
+                },
+                Coin {
+                    outpoint: bitcoin::OutPoint::new(txs.get(2).unwrap().txid(), 3),
+                    is_immature: false,
+                    block_info: Some(BlockInfo {
+                        height: 101_099,
+                        time: 1_122_000,
+                    }),
+                    amount: bitcoin::Amount::from_sat(98765),
+                    derivation_index: bip32::ChildNumber::from_normal_idx(1000).unwrap(),
+                    is_change: false,
+                    spend_txid: Some(txs.get(3).unwrap().txid()),
+                    spend_block: Some(BlockInfo {
+                        height: 101_199,
+                        time: 1_123_000,
+                    }),
+                },
+                Coin {
+                    outpoint: bitcoin::OutPoint::new(txs.get(4).unwrap().txid(), 4),
+                    is_immature: true,
+                    block_info: Some(BlockInfo {
+                        height: 101_100,
+                        time: 1_124_000,
+                    }),
+                    amount: bitcoin::Amount::from_sat(98765),
+                    derivation_index: bip32::ChildNumber::from_normal_idx(10000).unwrap(),
+                    is_change: false,
+                    spend_txid: None,
+                    spend_block: None,
+                },
+                Coin {
+                    outpoint: bitcoin::OutPoint::new(txs.get(5).unwrap().txid(), 5),
+                    is_immature: false,
+                    block_info: Some(BlockInfo {
+                        height: 101_102,
+                        time: 1_125_000,
+                    }),
+                    amount: bitcoin::Amount::from_sat(98765),
+                    derivation_index: bip32::ChildNumber::from_normal_idx(100000).unwrap(),
+                    is_change: false,
+                    spend_txid: Some(txs.get(6).unwrap().txid()),
+                    spend_block: Some(BlockInfo {
+                        height: 101_105,
+                        time: 1_126_000,
+                    }),
+                },
+            ];
+            conn.new_unspent_coins(&coins);
+            conn.confirm_coins(
+                &coins
+                    .iter()
+                    .filter_map(|c| c.block_info.map(|b| (c.outpoint, b.height, b.time)))
+                    .collect::<Vec<_>>(),
+            );
+            conn.confirm_spend(
+                &coins
+                    .iter()
+                    .filter_map(|c| {
+                        c.spend_block
+                            .as_ref()
+                            .map(|b| (c.outpoint, c.spend_txid.unwrap(), b.height, b.time))
+                    })
+                    .collect::<Vec<_>>(),
+            );
+
+            let wallet_txs: Vec<_> = txs
+                .iter()
+                .map(|tx| {
+                    let txid = tx.txid();
+                    let block_info = coins
+                        .iter()
+                        .find_map(|c| {
+                            if c.outpoint.txid == txid {
+                                Some(c.block_info)
+                            } else if c.spend_txid == Some(txid) {
+                                Some(c.spend_block)
+                            } else {
+                                None
+                            }
+                        })
+                        .unwrap();
+
+                    DbWalletTransaction {
+                        transaction: tx.clone(),
+                        block_info: block_info.map(|info| DbBlockInfo {
+                            height: info.height,
+                            time: info.time,
+                        }),
+                    }
+                })
+                .collect();
+
+            for indices in [
+                vec![3, 4, 5, 6],
+                vec![4, 5],
+                vec![1, 3, 5],
+                vec![1],
+                vec![1, 1, 3, 4, 3], // we can pass duplicate txids
+                vec![],              // can pass empty slice
+            ] {
+                let txids: Vec<_> = indices
+                    .iter()
+                    .map(|i| txs.get(*i).unwrap().txid())
+                    .collect();
+                let mut db_txs = conn.list_wallet_transactions(&txids);
+                db_txs.sort_by(|a, b| a.transaction.txid().cmp(&b.transaction.txid()));
+                let mut expected_txs: Vec<_> = indices
+                    .iter()
+                    .collect::<HashSet<_>>() // remove duplicates
+                    .into_iter()
+                    .map(|i| wallet_txs.get(*i).unwrap().clone())
+                    .collect();
+                expected_txs.sort_by(|a, b| a.transaction.txid().cmp(&b.transaction.txid()));
+                assert_eq!(&db_txs[..], &expected_txs[..],);
+            }
         }
 
         fs::remove_dir_all(tmp_dir).unwrap();
