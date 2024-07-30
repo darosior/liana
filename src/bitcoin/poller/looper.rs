@@ -196,7 +196,13 @@ fn add_txs_to_db(
     // Now retrieve txs.
     let txs: Vec<_> = txids
         .into_iter()
-        .map(|txid| bit.wallet_transaction(&txid).map(|(tx, _)| tx))
+        .filter_map(|txid| {
+            if db_conn.get_tx(&txid).is_none() {
+                Some(bit.wallet_transaction(&txid).map(|(tx, _)| tx))
+            } else {
+                None
+            }
+        })
         .collect::<Option<Vec<_>>>()
         .expect("we must retrieve all txs");
     if !txs.is_empty() {
