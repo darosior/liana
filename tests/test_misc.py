@@ -268,7 +268,7 @@ def test_migration(lianad_multisig, bitcoind):
     lianad.cmd_line[0] = OLD_LIANAD_PATH
     lianad.restart_fresh(bitcoind)
     old_lianad_ver = lianad.rpc.getinfo()["version"]
-    assert old_lianad_ver in ["0.3.0", "1.0.0"]
+    assert old_lianad_ver in ["0.3.0", "1.0.0", "4.0.0", "5.0.0", "6.0.0"]
 
     # Perform some transactions. On Liana v0.3 there was no "updated_at" for Spend
     # transaction drafts.
